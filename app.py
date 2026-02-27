@@ -11,6 +11,8 @@ st.title("Smart Waste Management Dashboard")
 # --- authentication -------------------------------------------------
 def login():
     st.subheader("Please log in")
+
+    # traditional credential form
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
     if st.button("Log in"):
@@ -20,6 +22,25 @@ def login():
             st.success("Logged in successfully")
         else:
             st.error("Invalid credentials")
+
+    st.markdown("---")
+    st.write("*Or use your Google account to sign in:*")
+
+    # Google OAuth link (requires config in Streamlit secrets)
+    if "google" in st.secrets:
+        from urllib.parse import urlencode
+        params = {
+            "client_id": st.secrets.google.client_id,
+            "redirect_uri": st.secrets.google.redirect_uri,
+            "response_type": "code",
+            "scope": "openid email profile",
+            "access_type": "offline",
+            "prompt": "select_account",
+        }
+        auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)
+        st.markdown(f"[Sign in with Google]({auth_url})")
+    else:
+        st.info("Google sign-in not configured. Add credentials to Streamlit secrets.")
 
 # show login form if not logged in
 if "logged_in" not in st.session_state or not st.session_state.logged_in:
