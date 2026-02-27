@@ -42,9 +42,12 @@ page = st.sidebar.radio("Go to", [
 
 # ------------------ data utilities ------------------
 @st.cache_data
-def generate_sample_dataset():
-    dates = pd.date_range("2025-01-01", "2025-12-31", freq="W")
+def generate_sample_dataset(num_records: int = 600):
+    """Generate approximately `num_records` rows by varying number of wards and weeks."""
+    # choose reasonable number of wards and weeks to reach target
     wards = [f"Ward {i}" for i in range(1, 11)]
+    weeks = int(np.ceil(num_records / len(wards)))
+    dates = pd.date_range("2025-01-01", periods=weeks, freq="W")
     rows = []
     for d in dates:
         for w in wards:
@@ -55,9 +58,14 @@ def generate_sample_dataset():
                 "recycling_rate": np.random.rand(),
                 "population_density": np.random.randint(1000, 10000),
             })
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    if len(df) > num_records:
+        df = df.sample(num_records, random_state=42).reset_index(drop=True)
+    return df
 
-df = generate_sample_dataset()
+# allow user to choose how much synthetic data to produce (around 600 by default)
+num_samples = st.sidebar.number_input("Dataset size", min_value=100, max_value=2000, value=600, step=100)
+df = generate_sample_dataset(int(num_samples))
 
 # download helper
 
