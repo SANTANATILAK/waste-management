@@ -80,7 +80,12 @@ def make_downloadable(df, filename="report.csv"):
 def show_dashboard():
     st.title("Smart Waste Management Dashboard")
     st.markdown("This system offers data analysis, clustering, route optimization, and more.")
-    st.dataframe(df.head())
+    st.write(f"Dataset contains **{len(df)}** records")
+    if st.button("Show full dataset"):
+        st.dataframe(df)
+    if st.button("Download dataset"):
+        buf = make_downloadable(df)
+        st.download_button("Download CSV", data=buf, file_name="dataset.csv", mime="text/csv")
 
 
 def show_data_analysis():
