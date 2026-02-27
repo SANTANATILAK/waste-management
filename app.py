@@ -27,7 +27,14 @@ def login():
     st.write("*Or use your Google account to sign in:*")
 
     # Google OAuth link (requires config in Streamlit secrets)
-    if "google" in st.secrets:
+    # safely access secrets; return False if missing
+    def has_google_secrets():
+        try:
+            return "google" in st.secrets and st.secrets.google.get("client_id")
+        except Exception:
+            return False
+
+    if has_google_secrets():
         from urllib.parse import urlencode
         params = {
             "client_id": st.secrets.google.client_id,
@@ -40,7 +47,7 @@ def login():
         auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)
         st.markdown(f"[Sign in with Google]({auth_url})")
     else:
-        st.info("Google sign-in not configured. Add credentials to Streamlit secrets.")
+        st.info("Google sign-in not configured. Add credentials to Streamlit secrets (local: .streamlit/secrets.toml)")
 
 # show login form if not logged in
 if "logged_in" not in st.session_state or not st.session_state.logged_in:
