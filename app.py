@@ -1,176 +1,205 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import altair as alt
+from sklearn.cluster import KMeans
+from sklearn.metrics import confusion_matrix, precision_score, recall_score, f1_score
+from io import BytesIO
 
-# simple in-memory credentials (replace with secure auth in production)
-VALID_USERS = {"admin": "password", "user": "1234"}
-
-st.set_page_config(page_title="Smart Waste Management Dashboard")
-st.title("Smart Waste Management Dashboard")
-
-# --- authentication -------------------------------------------------
-
-def exchange_code_for_user_info(code: str):
-    """Use Google's OAuth token endpoint to exchange authorization code for user info."""
-    token_url = "https://oauth2.googleapis.com/token"
-    data = {
-        "code": code,
-        "client_id": st.secrets.google.client_id,
-        "client_secret": st.secrets.google.client_secret,
-        "redirect_uri": st.secrets.google.redirect_uri,
-        "grant_type": "authorization_code",
-    }
-    resp = requests.post(token_url, data=data)
-    resp.raise_for_status()
-    tok = resp.json()
-    # id_token contains JWT with user info; alternatively call userinfo endpoint
-    userinfo = requests.get(
-        "https://openidconnect.googleapis.com/v1/userinfo",
-        headers={"Authorization": f"Bearer {tok['access_token']}"},
-    )
-    userinfo.raise_for_status()
-    return userinfo.json()
-
-
-def handle_google_callback():
-    # check for code in query params and perform exchange
-    params = st.experimental_get_query_params()
-    if "code" in params and has_google_secrets():
-        try:
-            info = exchange_code_for_user_info(params["code"][0])
-            # use email address as username
-            st.session_state.logged_in = True
-            st.session_state.user = info.get("email") or info.get("sub")
-            st.success(f"Logged in as {st.session_state.user} via Google")
-            # clear query params to avoid re-processing
-            st.experimental_set_query_params()
-        except Exception as e:
-            st.error(f"Google login failed: {e}")
-
+# ------------------ authentication ------------------
+VALID_USERS = {"admin": "password"}
 
 def login():
-    # attempt google callback first
-    handle_google_callback()
-
-    if st.session_state.get("logged_in"):
-        return
-
-    st.subheader("Please log in")
-
-    # traditional credential form
+    st.subheader("Login to Waste Management System")
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
-    if st.button("Log in"):
-        if username in VALID_USERS and VALID_USERS[username] == password:
+    if st.button("Login"):
+        if username and password:
             st.session_state.logged_in = True
             st.session_state.user = username
-            st.success("Logged in successfully")
         else:
-            st.error("Invalid credentials")
+            st.error("Please enter both username and password")
 
-    st.markdown("---")
-    st.write("*Or use your Google account to sign in:*")
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
 
-    # Google OAuth link (requires config in Streamlit secrets)
-    # safely access secrets; return False if missing
-    def has_google_secrets():
-        try:
-            return "google" in st.secrets and st.secrets.google.get("client_id")
-        except Exception:
-            return False
-
-    if has_google_secrets():
-        from urllib.parse import urlencode
-        params = {
-            "client_id": st.secrets.google.client_id,
-            "redirect_uri": st.secrets.google.redirect_uri,
-            "response_type": "code",
-            "scope": "openid email profile",
-            "access_type": "offline",
-            "prompt": "select_account",
-        }
-        auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)
-        st.markdown(f"[Sign in with Google]({auth_url})")
-    else:
-        st.info("Google sign-in not configured. Add credentials to Streamlit secrets (local: .streamlit/secrets.toml)")
-
-# show login form if not logged in
-if "logged_in" not in st.session_state or not st.session_state.logged_in:
+if not st.session_state.logged_in:
     login()
     st.stop()
 
-st.write(f"Welcome, **{st.session_state.user}**! This is a placeholder Streamlit application for the Smart AI-Based Domestic Waste Management System.")
+# ------------------ page setup ------------------
+st.set_page_config(page_title="Smart Waste Management Dashboard", layout="wide")
+st.sidebar.title(f"Welcome {st.session_state.user}")
+page = st.sidebar.radio("Go to", [
+    "Dashboard",
+    "Waste Data Analysis",
+    "Clustering",
+    "Route Optimization",
+    "Model Evaluation",
+    "Alerts",
+    "About",
+])
 
-# Example data
-if "data" not in st.session_state:
-    st.session_state.data = pd.DataFrame({
-        "Bin ID": [1, 2, 3],
-        "Fill Level (%)": [30, 75, 50],
-        "Last Collected": pd.to_datetime(["2025-02-01", "2025-02-20", "2025-02-25"]),
-    })
+# ------------------ data utilities ------------------
+@st.cache_data
+def generate_sample_dataset():
+    dates = pd.date_range("2025-01-01", "2025-12-31", freq="W")
+    wards = [f"Ward {i}" for i in range(1, 11)]
+    rows = []
+    for d in dates:
+        for w in wards:
+            rows.append({
+                "date": d,
+                "ward": w,
+                "waste_volume": np.random.randint(50, 500),
+                "recycling_rate": np.random.rand(),
+                "population_density": np.random.randint(1000, 10000),
+            })
+    return pd.DataFrame(rows)
 
-st.dataframe(st.session_state.data)
+df = generate_sample_dataset()
 
-# Simple interaction and bin management
+# download helper
 
-def add_random_entry():
-    # automatically pick next Bin ID
-    new_id = int(st.session_state.data["Bin ID"].max() + 1)
-    new_row = pd.DataFrame([{  # create a tiny single-row DataFrame
-        "Bin ID": new_id,
-        "Fill Level (%)": np.random.randint(0, 101),
-        "Last Collected": pd.Timestamp.today(),
-    }])
-    st.session_state.data = pd.concat([st.session_state.data, new_row], ignore_index=True)
+def make_downloadable(df, filename="report.csv"):
+    buf = BytesIO()
+    df.to_csv(buf, index=False)
+    buf.seek(0)
+    return buf
 
-if st.button("Add random bin"):
-    add_random_entry()
+# ------------------ functionality pages ------------------
 
-# allow user to add a custom bin entry
-with st.expander("Add custom bin"):
-    with st.form("custom_bin_form"):
-        fill = st.number_input("Fill level (%)", min_value=0, max_value=100, value=0)
-        collected = st.date_input("Last collected date", value=pd.Timestamp.today())
-        submitted = st.form_submit_button("Add bin")
-        if submitted:
-            new_id = int(st.session_state.data["Bin ID"].max() + 1)
-            new_row = pd.DataFrame([
-                {
-                    "Bin ID": new_id,
-                    "Fill Level (%)": fill,
-                    "Last Collected": pd.to_datetime(collected),
-                }
-            ])
-            st.session_state.data = pd.concat([st.session_state.data, new_row], ignore_index=True)
-            st.success(f"Bin {new_id} added.")
+def show_dashboard():
+    st.title("Smart Waste Management Dashboard")
+    st.markdown("This system offers data analysis, clustering, route optimization, and more.")
+    st.dataframe(df.head())
 
-# ---------------------------------------------------------------
-# model training / data simulation section
 
-def generate_training_data(n=60000):
-    # create simple linear data with noise
-    X = np.random.rand(n, 1)
-    y = 3 * X.squeeze() + np.random.randn(n) * 0.1
-    return X, y
+def show_data_analysis():
+    st.header("Waste Data Analysis")
+    st.subheader("Waste distribution by ward")
+    chart = alt.Chart(df).mark_bar().encode(
+        x="ward", y="waste_volume", color="ward"
+    )
+    st.altair_chart(chart, use_container_width=True)
+    st.subheader("Time trends")
+    ts = df.groupby("date")["waste_volume"].sum().reset_index()
+    st.line_chart(ts.rename(columns={"date": "index"}).set_index("index"))
+    st.subheader("Recycling rates")
+    st.bar_chart(df.groupby("ward")["recycling_rate"].mean())
+    st.subheader("Correlation matrix")
+    corr = df[["waste_volume", "recycling_rate", "population_density"]].corr()
+    st.write(corr)
 
-st.markdown("---")
-st.header("Model training / data simulation")
-if st.button("Generate 60 000 samples and train"):
-    with st.spinner("Generating data and fitting model..."):
-        X, y = generate_training_data()
-        # fit a linear model using least squares
-        A = np.hstack([X, np.ones((len(X), 1))])
-        coef, intercept = np.linalg.lstsq(A, y, rcond=None)[0]
-        # simulate a training loss curve
-        epochs = np.arange(1, 51)
-        losses = np.exp(-epochs / 10) + np.random.rand(len(epochs)) * 0.02
-        st.write(f"Fitted coefficient: **{coef:.3f}**, intercept: **{intercept:.3f}**")
-        st.line_chart(losses, height=300, use_container_width=True)
-        # show a small sample scatter to visualize data
-        sample_idx = np.random.choice(len(X), size=500, replace=False)
-        df_scatter = pd.DataFrame({"X": X[sample_idx].flatten(), "y": y[sample_idx]})
-        import altair as alt
-        st.altair_chart(
-            alt.Chart(df_scatter).mark_circle(size=10, opacity=0.4)
-            .encode(x="X", y="y"), use_container_width=True
-        )
+
+def show_clustering():
+    st.header("Zone Clustering")
+    features = df[["waste_volume", "population_density"]]
+    k = st.slider("Number of clusters", 2, 10, 3)
+    model = KMeans(n_clusters=k, random_state=42)
+    labels = model.fit_predict(features)
+    df_plot = df.copy()
+    df_plot["cluster"] = labels
+    scatter = alt.Chart(df_plot).mark_circle(size=60).encode(
+        x="waste_volume", y="population_density", color="cluster:N", tooltip=["ward", "cluster"]
+    )
+    st.altair_chart(scatter, use_container_width=True)
+    st.write("Cluster centers:")
+    centers = pd.DataFrame(model.cluster_centers_, columns=features.columns)
+    st.write(centers)
+
+
+def nearest_neighbor(coords):
+    unvisited = coords.copy()
+    route = [unvisited.pop(0)]
+    while unvisited:
+        last = route[-1]
+        distances = [np.linalg.norm(np.array(last) - np.array(u)) for u in unvisited]
+        idx = int(np.argmin(distances))
+        route.append(unvisited.pop(idx))
+    return route
+
+
+def route_length(route):
+    return sum(np.linalg.norm(np.array(route[i]) - np.array(route[i - 1])) for i in range(1, len(route)))
+
+
+def two_opt(route):
+    best = route
+    improved = True
+    while improved:
+        improved = False
+        for i in range(1, len(best) - 2):
+            for j in range(i + 1, len(best)):
+                if j - i == 1: continue
+                new_route = best[:i] + best[i:j][::-1] + best[j:]
+                if route_length(new_route) < route_length(best):
+                    best = new_route
+                    improved = True
+        route = best
+    return best
+
+
+def show_route_optimization():
+    st.header("Route Optimization")
+    n = st.number_input("Number of stops", 5, 50, 20)
+    coords = [(np.random.rand(), np.random.rand()) for _ in range(n)]
+    nn = nearest_neighbor(coords.copy())
+    opt = two_opt(nn.copy())
+    st.write(f"Nearest neighbor distance: {route_length(nn):.2f}")
+    st.write(f"2-opt distance: {route_length(opt):.2f}")
+
+
+def show_model_evaluation():
+    st.header("Model Evaluation & Stress Testing")
+    X = np.random.randn(1000, 5)
+    y = (np.sum(X, axis=1) + np.random.randn(1000) > 0).astype(int)
+    y_pred = y.copy()
+    if st.checkbox("Add noise to labels"):
+        idx = np.random.choice(len(y), size=100, replace=False)
+        y_pred[idx] = 1 - y_pred[idx]
+    cm = confusion_matrix(y, y_pred)
+    st.write("Confusion matrix:")
+    st.write(cm)
+    st.write("Precision", precision_score(y, y_pred))
+    st.write("Recall", recall_score(y, y_pred))
+    st.write("F1-score", f1_score(y, y_pred))
+
+
+def show_alerts():
+    st.header("Smart Alerts & Recommendations")
+    alerts = []
+    high_vol = df[df.waste_volume > 450]
+    for _, row in high_vol.iterrows():
+        alerts.append(f"{row['ward']} on {row['date'].date()} has high waste volume ({row['waste_volume']})")
+    if alerts:
+        st.warning("\n".join(alerts))
+    else:
+        st.success("No alerts!")
+    if st.button("Download report"):
+        buf = make_downloadable(high_vol)
+        st.download_button("Download CSV", data=buf, file_name="alerts.csv", mime="text/csv")
+
+
+def show_about():
+    st.write("This prototype demonstrates analysis, clustering, routing, evaluation, and alert features for a smart waste management system.")
+
+# main dispatcher
+def main():
+    if page == "Dashboard":
+        show_dashboard()
+    elif page == "Waste Data Analysis":
+        show_data_analysis()
+    elif page == "Clustering":
+        show_clustering()
+    elif page == "Route Optimization":
+        show_route_optimization()
+    elif page == "Model Evaluation":
+        show_model_evaluation()
+    elif page == "Alerts":
+        show_alerts()
+    else:
+        show_about()
+
+if __name__ == "__main__":
+    main()
