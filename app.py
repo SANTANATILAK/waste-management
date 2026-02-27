@@ -9,7 +9,52 @@ st.set_page_config(page_title="Smart Waste Management Dashboard")
 st.title("Smart Waste Management Dashboard")
 
 # --- authentication -------------------------------------------------
+
+def exchange_code_for_user_info(code: str):
+    """Use Google's OAuth token endpoint to exchange authorization code for user info."""
+    token_url = "https://oauth2.googleapis.com/token"
+    data = {
+        "code": code,
+        "client_id": st.secrets.google.client_id,
+        "client_secret": st.secrets.google.client_secret,
+        "redirect_uri": st.secrets.google.redirect_uri,
+        "grant_type": "authorization_code",
+    }
+    resp = requests.post(token_url, data=data)
+    resp.raise_for_status()
+    tok = resp.json()
+    # id_token contains JWT with user info; alternatively call userinfo endpoint
+    userinfo = requests.get(
+        "https://openidconnect.googleapis.com/v1/userinfo",
+        headers={"Authorization": f"Bearer {tok['access_token']}"},
+    )
+    userinfo.raise_for_status()
+    return userinfo.json()
+
+
+def handle_google_callback():
+    # check for code in query params and perform exchange
+    params = st.experimental_get_query_params()
+    if "code" in params and has_google_secrets():
+        try:
+            info = exchange_code_for_user_info(params["code"][0])
+            # use email address as username
+            st.session_state.logged_in = True
+            st.session_state.user = info.get("email") or info.get("sub")
+            st.success(f"Logged in as {st.session_state.user} via Google")
+            # clear query params to avoid re-processing
+            st.experimental_set_query_params()
+        except Exception as e:
+            st.error(f"Google login failed: {e}")
+
+
 def login():
+    # attempt google callback first
+    handle_google_callback()
+
+    if st.session_state.get("logged_in"):
+        return
+
     st.subheader("Please log in")
 
     # traditional credential form
